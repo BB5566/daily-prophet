@@ -446,28 +446,28 @@ def main():
 
 
 def early_prophet():
-    """初版預言家日報（魔法報紙風格 + 真實數據 + 可互動）"""
+    """預言家日報（魔法報紙風格 + 真實數據，不含互動選單）"""
     import shutil
-    import subprocess
     import json
+    import os
 
-    def _box(texts):
-        """畫魔法框"""
+    def _box(texts, width=58):
+        """畫魔法框，支援 CJK 寬度"""
         def _w(s):
             return sum(2 if ord(c) > 127 else 1 for c in s)
         max_w = max(_w(t) for t in texts) + 4
-        top = "╔" + "═" * (max_w - 2) + "╗"
-        bottom = "╚" + "═" * (max_w - 2) + "╝"
+        top = "═" * (max_w - 2)
+        bottom = "═" * (max_w - 2)
         body = "\n".join("║ " + t + " " * (max_w - 4 - _w(t)) + " ║" for t in texts)
-        return f"{top}\n{body}\n{bottom}"
+        return f"╔{top}╗\n{body}\n╚{bottom}╝"
 
-    # 頭版標題
+    # 頭版
     today = NOW.strftime("%m/%d")
     ed = (NOW - datetime(2026, 10, 22, tzinfo=NOW.tzinfo)).days + 1
     header = [
         f"🔮 每日預言家 · 第 {ed:03d} 期（{today}·{WEEKDAY}）",
-        f"── 傲羅辦公室證實：系統昨夜安全檢查通過 ──",
-        "磁碟空間充足，無食屍鬼入侵跡象",
+        "── 傲羅辦公室證實：系統昨夜安全檢查通過 ──",
+        "磁碟空間充足，無食屍鬼入侵軌跡",
     ]
 
     # 系統報告（複用現有 section）
@@ -476,74 +476,99 @@ def early_prophet():
     sys_lines += self_heal()
     sys_lines += studio_queue()
 
-    # 社群動態（先寫死，之後接 crawl4ai）
-    social = [
-        "【魔法圈動態 · X 熱門話題】",
-        "  • #AI 討論破 5 萬則（X 趨勢）",
-        "  • 魔法部發布 Hermes v0.22.4（小修正，可升級）",
-    ]
+    # 學校待辦（讀 school_deadlines.json）
+    task = _read_school_deadlines()
 
-    # 待辦（讀現有）
-    task = todo()
-    if not task:
-        task = ["📅 今日任務清單", "  • 未載入行事曆（待接輔大 API）"]
-
-    # 考試
+    # 考试
     exam = eval_result()
 
     # 磁碟
-    disk = space()
+    d = space()
 
     # 預言（基於真實數據）
     proph = ["🔮 預言家時間 · 不經占卜，純看紀錄"]
+    proph_items = []
     try:
         free_gb = shutil.disk_usage(
             "/System/Volumes/Data" if os.path.exists("/System/Volumes/Data") else str(HERMES)
         ).free / 1024**3
         days_left = int(free_gb / 50)  # 假設每天用 50GB
-        proph.append(f"  1. 磁碟空間：剩 {free_gb:.0f}GB，約 {days_left} 天到 80% 警戒線")
+        proph_items.append(f"磁碟空間：剩 {free_gb:.0f}GB，約 {days_left} 天到 80% 警戒線")
     except Exception:
-        proph.append("  1. 磁碟資料查不到")
+        proph_items.append("磁碟資料查不到")
 
     studio = studio_queue()
     if studio and "連不到佇列" in studio[0]:
-        proph.append("  2. Studio 佇列：今天有斷線，明天可能再發生")
+        proph_items.append("Studio 佇列：今天有斷線，明天可能再發生")
 
     if exam:
-        proph.append("  3. 考試：最近退步，建議今晚複習不穩項目")
+        proph_items.append("考試：最近退步，建議今晚複習不穩項目")
 
+    # 新增：最近考試分數
+    latest = HERMES / "logs" / "eval" / "latest.json"
+    if latest.exists():
+        r = json.loads(latest.read_text(encoding="utf-8"))
+        if r.get("passed"):
+            proph_items.append(f"最近考試：{r['passed']}/{r['total']}（{r['time'][:10]}）")
+        if r.get("regressions"):
+            proph_items.append(f"退步項：{r['regressions']}")
+
+    for i, item in enumerate(proph_items, 1):
+        proph.append(f"  {i}. {item}")
     proph.append("")
     proph.append("  🧙‍♂️ 杰哥的忠告：『別等傲羅來敲門才整理記憶庫』")
 
-    # 互動區
-    interactive = [
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "回覆數字看詳情或決定：",
-        "  1  看 PR 詳情",
-        "  2  看考試細節",
-        "  3  看 Studio 斷線報告",
-        "  ✅ 同意（我動手執行）",
-        "  ❌ 否決（先不要）",
-        "  自由回（你想看什麼）",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-
-    # 組合
+    # 組合（移除 X 熱門話題、互動選單）
     parts = [
         _box(header),
         "",
         "\n".join(sys_lines),
         "",
-        "\n".join(social),
-        "",
         "\n".join(task),
+        "",
+        "\n".join(d),
         "",
         "\n".join(proph),
         "",
-        "\n".join(interactive),
-        "",
     ]
     return "\n".join(parts)
+
+
+def _read_school_deadlines():
+    """讀 school_deadlines.json，過濾近 7 天內截止項，優惠單獨列"""
+    path = HERMES / "logs" / "school_deadlines.json"
+    if not path.exists():
+        return ["📅 學校待辦", "  • 找不到行事曆資料"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["📅 學校待辦", "  • 讀取行事曆失敗"]
+
+    now = NOW
+    tasks = []
+    perks = []
+    for key, val in data.items():
+        what = val.get("what", "")
+        end = val.get("end", "")
+        if end and key.startswith("perk-"):
+            perks.append(f"{what}（{end[:10]}）")
+        elif end:
+            end_date = end[:10]
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, tzinfo=now.tzinfo)
+            if now <= end_dt <= now + timedelta(days=7):
+                tasks.append(f"{what}（{end_date} 截止）")
+            elif end_dt > now + timedelta(days=7):
+                tasks.append(f"{what}（{end_date} 截止）")
+    if not tasks and not perks:
+        return ["📅 學校待辦", "  • 近期沒有截止項"]
+    task_lines = ["📅 學校待辦"]
+    for t in tasks[:5]:
+        task_lines.append(f"  • {t}")
+    if len(tasks) > 5:
+        task_lines.append(f"  ... 還有 {len(tasks) - 5} 件")
+    for p in perks:
+        task_lines.append(f"  ★ 優惠：{p}")
+    return task_lines
 
 
 if __name__ == "__main__":
